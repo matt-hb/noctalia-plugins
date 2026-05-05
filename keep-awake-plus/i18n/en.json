@@ -1,0 +1,35 @@
+{
+  "panel": {
+    "title": "Keep Awake",
+    "unlimited": "∞",
+    "extend": "+{minutes}m",
+    "keep-display": {
+      "label": "Keep display awake",
+      "desc": "When off, monitor may dim/sleep while system stays awake"
+    }
+  },
+  "settings": {
+    "default-scope": {
+      "label": "Default scope",
+      "desc": "partial = system awake, monitor may sleep; full = everything blocked"
+    },
+    "show-remaining": {
+      "label": "Show remaining time beside icon"
+    },
+    "activate-on-left-click": {
+      "label": "Left click re-activates last combo",
+      "desc": "Right click opens panel instead"
+    },
+    "quick-extend": {
+      "label": "Quick-extend (minutes)"
+    },
+    "durations": {
+      "label": "Duration choices (minutes, comma-separated)"
+    },
+    "include-unlimited": {
+      "label": "Show ∞ (unlimited) option"
+    },
+    "scope-partial": "partial",
+    "scope-full": "full"
+  }
+}
