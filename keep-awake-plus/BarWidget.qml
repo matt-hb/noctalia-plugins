@@ -29,9 +29,15 @@ Item {
   visible: root.active
 
   function buildTooltip() {
-    if (!root.active) return "Keep Awake · off";
-    const tg = (mainInstance && mainInstance.thermalGuardActive) ? "active" : "off";
-    return "Keep Awake · " + root.scope + " · " + root.remainingText + " left · thermal guard: " + tg;
+    if (!root.active) return pluginApi?.tr("tooltip.off") ?? "";
+    const tgKey = (mainInstance && mainInstance.thermalGuardActive)
+      ? "tooltip.thermal-guard-on"
+      : "tooltip.thermal-guard-off";
+    return pluginApi?.tr("tooltip.active", {
+      scope: root.scope,
+      remaining: root.remainingText,
+      tg: pluginApi?.tr(tgKey) ?? ""
+    }) ?? "";
   }
 
   BarPill {

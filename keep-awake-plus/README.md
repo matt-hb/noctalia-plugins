@@ -27,12 +27,9 @@ This plugin shells out to a host-side `system-awake` script that wraps
 natural timer expiry to trigger suspend (since neither logind nor
 `hyprdynamicmonitors` / `hypridle` re-fire after our inhibit lock releases).
 
-A portable reference implementation is bundled at
-[`scripts/system-awake`](scripts/system-awake). Install it on your `$PATH`:
-
-```sh
-install -m 755 scripts/system-awake ~/.local/bin/system-awake
-```
+The script ships with the plugin at
+[`scripts/system-awake`](scripts/system-awake) and is invoked from the
+plugin's install directory — no `$PATH` setup required.
 
 Required runtime tools: `bash`, `coreutils`, `procps`, `util-linux`,
 `systemd`, `jq`. Optional: `glib` (for UPower lid checks) and `libnotify`
@@ -40,9 +37,6 @@ Required runtime tools: `bash`, `coreutils`, `procps`, `util-linux`,
 
 For the Nix flavor — packaged with a thermal-guard service and integrated
 into a Hyprland setup — see <https://github.com/noamsto/nix-config>.
-
-If `system-awake` is not in `PATH` at startup, the plugin disables its
-pollers and shows a one-time error toast.
 
 ## Settings
 

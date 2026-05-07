@@ -115,10 +115,13 @@ Item {
             color: Color.mOnSurface
           }
           NText {
-            text: root.active
-              ? (mainInstance.formatRemaining() + " remaining"
-                  + (mainInstance.scope === "full" ? " · display on" : " · display may sleep"))
-              : "Off"
+            text: {
+              if (!root.active) return pluginApi?.tr("panel.off") ?? "";
+              const key = mainInstance.scope === "full"
+                ? "panel.remaining-display-on"
+                : "panel.remaining-display-may-sleep";
+              return pluginApi?.tr(key, { time: mainInstance.formatRemaining() }) ?? "";
+            }
             pointSize: Style.fontSizeS
             color: Color.mOnSurfaceVariant
             elide: Text.ElideRight
@@ -244,7 +247,7 @@ Item {
           anchors.verticalCenter: parent.verticalCenter
           width: actionRow.extendShown ? actionRow.halfWidth : actionRow.width
           height: implicitHeight
-          text: root.active ? "Turn off" : "Turn on"
+          text: pluginApi?.tr(root.active ? "panel.turn-off" : "panel.turn-on") ?? ""
           icon: "power"
           backgroundColor: root.active
             ? Color.mError

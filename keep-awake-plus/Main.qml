@@ -16,9 +16,9 @@ Item {
   property var endEpoch: null  // null → unlimited; number → expiry unix seconds
   property bool thermalGuardActive: false
 
-  // Set true once we've confirmed `system-awake` exists in PATH. Until then,
-  // pollers stay idle to avoid log-spamming a misconfigured user.
-  property bool _binaryAvailable: false
+  // Bundled host-side backend. Resolved from the plugin's install dir so the
+  // script doesn't need to be on $PATH.
+  readonly property string scriptPath: (pluginApi?.pluginDir ?? "") + "/scripts/system-awake"
 
   // Suppress the enable/disable toast on the first status apply so a session
   // already running when the shell starts doesn't spuriously "enable" us.
@@ -71,12 +71,12 @@ Item {
   onActiveChanged: {
     if (_firstStatusApplied) {
       if (active) {
-        const label = (endEpoch === null) ? "∞" : durationLabel;
-        const desc = scope + " · " + label
-                   + (scope === "full" ? " · display on" : " · display may sleep");
-        ToastService.showNotice("Keep Awake on", desc, "coffee");
+        const label = (endEpoch === null) ? (pluginApi?.tr("panel.unlimited") ?? "∞") : durationLabel;
+        const descKey = (scope === "full") ? "toast.enabled-desc-full" : "toast.enabled-desc-partial";
+        const desc = pluginApi?.tr(descKey, { scope: scope, label: label }) ?? "";
+        ToastService.showNotice(pluginApi?.tr("toast.enabled-title") ?? "", desc, "coffee");
       } else {
-        ToastService.showNotice("Keep Awake off", "", "coffee-off");
+        ToastService.showNotice(pluginApi?.tr("toast.disabled-title") ?? "", "", "coffee-off");
       }
     }
   }
@@ -93,33 +93,15 @@ Item {
 
   // --- Pollers ---
   Process {
-    id: probeProc
-    running: false
-    command: ["sh", "-c", "command -v system-awake"]
-    onExited: function(exitCode) {
-      if (exitCode === 0) {
-        root._binaryAvailable = true;
-      } else {
-        ToastService.showError("Keep Awake+",
-          "system-awake binary not found in PATH — plugin disabled. " +
-          "Install scripts/system-awake from this plugin into your PATH " +
-          "(e.g., ~/.local/bin/system-awake) and reload.");
-      }
-    }
-  }
-
-  Component.onCompleted: probeProc.running = true
-
-  Process {
     id: statusProc
     running: false
-    command: ["system-awake", "status", "--json"]
+    command: [root.scriptPath, "status", "--json"]
     stdout: StdioCollector {
       onStreamFinished: {
         try {
           root._applyStatus(JSON.parse(this.text.trim() || "{}"));
         } catch (e) {
-          console.warn("keep-awake-plus: failed to parse status:", e, "text:", this.text);
+          Logger.w("keep-awake-plus", "Failed to parse status:", e, "text:", this.text);
         }
       }
     }
@@ -137,7 +119,7 @@ Item {
 
   Timer {
     id: statusPoller
-    interval: 1000; repeat: true; running: root._binaryAvailable; triggeredOnStart: true
+    interval: 1000; repeat: true; running: pluginApi !== null; triggeredOnStart: true
     onTriggered: root._pollStatus()
   }
 
@@ -194,7 +176,7 @@ Item {
     // non-positive duration except the explicit -1 "unlimited" sentinel.
     const d = durationSeconds;
     if (d !== -1 && (!Number.isFinite(d) || d < 1)) {
-      console.warn("keep-awake-plus: refused start with invalid duration:", d);
+      Logger.w("keep-awake-plus", "Refused start with invalid duration:", d);
       return;
     }
     const durArg = (d === -1) ? "unlimited" : String(Math.floor(d));
@@ -208,7 +190,7 @@ Item {
     root.endEpoch = (d === -1) ? null : Math.floor(Date.now() / 1000) + Math.floor(d);
     root.active = true;
 
-    Quickshell.execDetached(["system-awake", "start", durArg, "--scope=" + pickScope, "--silent"]);
+    Quickshell.execDetached([root.scriptPath, "start", durArg, "--scope=" + pickScope, "--silent"]);
     Qt.callLater(root._pollStatus);
   }
 
@@ -218,7 +200,7 @@ Item {
     root.durationLabel = "";
     root.endEpoch = null;
     root.active = false;
-    Quickshell.execDetached(["system-awake", "off", "--silent"]);
+    Quickshell.execDetached([root.scriptPath, "off", "--silent"]);
     Qt.callLater(root._pollStatus);
   }
 
@@ -229,14 +211,17 @@ Item {
     if (root.active && root.endEpoch !== null) {
       root.endEpoch = root.endEpoch + Math.floor(seconds);
     }
-    Quickshell.execDetached(["system-awake", "extend", String(seconds), "--silent"]);
+    Quickshell.execDetached([root.scriptPath, "extend", String(seconds), "--silent"]);
     const mins = Math.floor(seconds / 60);
-    ToastService.showNotice("Keep Awake extended", "+" + mins + "m", "clock-plus");
+    ToastService.showNotice(
+      pluginApi?.tr("toast.extended-title") ?? "",
+      pluginApi?.tr("toast.extended-desc", { minutes: mins }) ?? "",
+      "clock-plus");
     Qt.callLater(root._pollStatus);
   }
 
   function toggleLast() {
-    Quickshell.execDetached(["system-awake", "toggle-last", "--silent"]);
+    Quickshell.execDetached([root.scriptPath, "toggle-last", "--silent"]);
     Qt.callLater(root._pollStatus);
   }
 
