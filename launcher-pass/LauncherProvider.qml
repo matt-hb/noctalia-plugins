@@ -11,44 +11,50 @@ Item {
   property var launcher: null
   property string name: "Launcher pass"
   property string supportedLayouts: "list"
-  property bool handleSearch: true
+  property bool handleSearch: false
   property bool supportsAutoPaste: false
 
   property var cachedEntries: []
   property bool loaded: false
   property string currentPath: ""
-  property var entryStack: ([])
+  property var entryStack: []
   property string searchQuery: ""
 
   property bool isDetailMode: false
   property var selectedEntry: null
-  property var selectedField: null
+  property string selectedField: ""
+
+  property bool pinentryActive: false
+  property bool restoringFromPinentry: false
+
+  property var cfg: pluginApi?.pluginSettings || ({})
+  property var defaults: pluginApi?.manifest?.metadata?.defaultSettings || ({})
 
   readonly property string passwordStoreDir: {
-    var configured = pluginApi?.pluginSettings?.storePath || pluginApi?.manifest?.metadata?.defaultSettings?.storePath || ""
+    var configured = cfg.storePath || defaults.storePath || ""
     if (configured !== "") return configured
     var envHome = Quickshell.env("HOME") || ""
     return envHome + "/.password-store"
   }
 
-  Process {
-    id: listProc
-    stdout: StdioCollector {}
-    onExited: function(exitCode, exitStatus) {
-      if (exitCode === 0) {
-        parseEntries(listProc.stdout.text, false)
-      }
-      loaded = true
-      if (launcher) launcher.updateResults()
-    }
+  function shellEscape(str) {
+    return str.replace(/'/g, "'\\''")
+  }
+
+  function resolveDir() {
+    return currentPath === "" ? passwordStoreDir : passwordStoreDir + "/" + currentPath
+  }
+
+  function getSetting(key, fallback) {
+    return (cfg[key] || defaults[key] || fallback)
   }
 
   Process {
-    id: searchAllProc
+    id: findProc
     stdout: StdioCollector {}
     onExited: function(exitCode, exitStatus) {
       if (exitCode === 0) {
-        parseEntries(searchAllProc.stdout.text, false)
+        parseEntries(findProc.stdout.text, root.searchQuery !== "")
       }
       loaded = true
       if (launcher) launcher.updateResults()
@@ -58,12 +64,28 @@ Item {
   Process {
     id: showProc
     stdout: StdioCollector {}
+    onStarted: {
+      pinentryTimer.start()
+    }
     onExited: function(exitCode, exitStatus) {
-      if (exitCode === 0) {
+      pinentryTimer.stop()
+      if (root.pinentryActive) {
+        root.pinentryActive = false
+        if (exitCode === 0) {
+          var data = parsePassEntry(showProc.stdout.text)
+          root.selectedEntry.data = data
+          root.isDetailMode = true
+          if (launcher) launcher.setSearchText(">pass ")
+        }
+        root.restoringFromPinentry = true
+        pluginApi.withCurrentScreen(function(screen) {
+          pluginApi.toggleLauncher(screen)
+        })
+        if (launcher) launcher.updateResults()
+      } else if (exitCode === 0) {
         var data = parsePassEntry(showProc.stdout.text)
-        root.selectedEntry = { "path": showProcPath, "data": data }
+        root.selectedEntry.data = data
         root.isDetailMode = true
-        root.selectedField = null
         if (launcher) {
           launcher.setSearchText(">pass ")
           launcher.updateResults()
@@ -76,49 +98,61 @@ Item {
     id: otpProc
     stdout: StdioCollector {}
     onExited: function(exitCode, exitStatus) {
-      if (exitCode === 0) {
-        var otp = otpProc.stdout.text.trim()
-        root.selectedEntry.data.otp = otp
-        if (root.selectedField === "otp") {
-          var escapedValue = otp.replace(/'/g, "'\\''")
-          copyProc.exec(["sh", "-c", "printf '%s' '" + escapedValue + "' | wl-copy"])
-        } else if (root.selectedField === "otp-type") {
-          var wtypeDelay = pluginApi?.pluginSettings?.wtypeDelay || pluginApi?.manifest?.metadata?.defaultSettings?.wtypeDelay || 12
-          var typeDelay = pluginApi?.pluginSettings?.typeDelay || pluginApi?.manifest?.metadata?.defaultSettings?.typeDelay || 0.2
-          var escValue = otp.replace(/'/g, "'\\''")
-          root.resetDetailMode()
-          launcher.close()
-          copyProc.exec(["sh", "-c", "sleep " + typeDelay + " && printf '%s' '" + escValue + "' | wtype -d " + wtypeDelay])
-        }
+      if (exitCode !== 0) return
+      var otp = otpProc.stdout.text.trim()
+      if (root.selectedField === "otp") {
+        var escapedValue = shellEscape(otp)
+        root.resetDetailMode()
+        launcher.close()
+        actionProc.exec(["sh", "-c", "printf '%s' '" + escapedValue + "' | wl-copy"])
+      } else if (root.selectedField === "type-otp") {
+        var typeDelay = getSetting("typeDelay", 0.5)
+        var wtypeDelay = getSetting("wtypeDelay", 12)
+        var escValue = shellEscape(otp)
+        root.resetDetailMode()
+        launcher.close()
+        actionProc.exec(["sh", "-c", "sleep " + typeDelay + " && printf '%s' '" + escValue + "' | wtype -d " + wtypeDelay + " -"])
       }
     }
   }
 
-  property string showProcPath: ""
-
   Process {
-    id: copyProc
+    id: actionProc
     onExited: function(exitCode, exitStatus) {
-      var skipNotify = root.selectedField === "otp" ||
-                       root.selectedField === "otp-type" ||
-                       root.selectedField === "type-password" ||
-                       root.selectedField === "type-field"
-      if (!skipNotify) {
+      if (selectedField !== "type-password" && selectedField !== "type-field" && selectedField !== "type-otp") {
         ToastService.showNotice(pluginApi?.tr("notification.copied") || "Copied to clipboard")
       }
     }
   }
 
-  function listCurrentDir() {
-    var targetPath = currentPath === "" ? passwordStoreDir : passwordStoreDir + "/" + currentPath
-    var escapedPath = targetPath.replace(/'/g, "'\\''")
-    listProc.exec(["find", escapedPath, "-maxdepth", "1", "-type", "f", "-name", "*.gpg", "-printf", "%f\n", "-o", "-maxdepth", "1", "-type", "d", "-not", "-name", ".*", "-printf", "%f/\n"])
+  Timer {
+    id: searchTimer
+    interval: 200
+    onTriggered: performSearch()
   }
 
-  function searchCurrentDir() {
-    var targetPath = currentPath === "" ? passwordStoreDir : passwordStoreDir + "/" + currentPath
-    var escapedPath = targetPath.replace(/'/g, "'\\''")
-    searchAllProc.exec(["find", escapedPath, "-type", "f", "-name", "*.gpg", "-printf", "%P\n"])
+  Timer {
+    id: pinentryTimer
+    interval: 300
+    onTriggered: {
+      if (showProc.running && showProc.stdout.text.trim() === "") {
+        pinentryActive = true
+        launcher.close()
+      }
+    }
+  }
+
+  function performSearch() {
+    loaded = false
+    var targetPath = resolveDir()
+    var escapedPath = shellEscape(targetPath)
+    if (searchQuery !== "") {
+      findProc.exec(["find", escapedPath, "-type", "f", "-name", "*.gpg", "-printf", "%P\n"])
+    } else {
+      findProc.exec(["find", escapedPath,
+        "-maxdepth", "1", "-type", "f", "-name", "*.gpg", "-printf", "%f\n",
+        "-o", "-maxdepth", "1", "-type", "d", "-not", "-name", ".*", "-printf", "%f/\n"])
+    }
   }
 
   function parseEntries(text, isSearch) {
@@ -138,9 +172,7 @@ Item {
         name = name.slice(0, -4)
       }
 
-      if (name === currentName && isDir) {
-        continue
-      }
+      if (name === currentName && isDir) continue
 
       var fullPath = currentPath === "" ? name : currentPath + "/" + name
 
@@ -150,123 +182,39 @@ Item {
           var dirPath = name.substring(0, lastSlash)
           if (!seenDirs[dirPath]) {
             seenDirs[dirPath] = true
-            entries.push({
-              "name": dirPath,
-              "fullPath": dirPath,
-              "isDir": true,
-              "isPassword": false
-            })
+            entries.push({ name: dirPath, fullPath: dirPath, isDir: true, isPassword: false })
           }
         }
       }
 
-      entries.push({
-        "name": name,
-        "fullPath": fullPath,
-        "isDir": isDir,
-        "isPassword": !isDir
-      })
+      entries.push({ name: name, fullPath: fullPath, isDir: isDir, isPassword: !isDir })
     }
 
     entries.sort(function(a, b) {
-      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
       return a.name.localeCompare(b.name)
     })
 
     cachedEntries = entries
   }
 
-  function init() {
-    loaded = false
-    if (searchQuery !== "") {
-      searchCurrentDir()
-    } else {
-      listCurrentDir()
-    }
-  }
-
-  function onOpened() {
-    currentPath = ""
-    entryStack = []
-    searchQuery = ""
-    cachedEntries = []
-    loaded = false
-    isDetailMode = false
-    selectedEntry = null
-    selectedField = null
-    init()
-  }
-
-  function handleCommand(searchText) {
-    return searchText.startsWith(">pass")
-  }
-
-  function commands() {
-    return [{
-      "name": ">pass",
-      "description": "Search gnu pass password entries",
-      "icon": "lock",
-      "isTablerIcon": true,
-      "onActivate": function() {
-        launcher.setSearchText(">pass ")
-      }
-    }]
-  }
-
-  function goBack() {
-    if (entryStack.length > 0) {
-      var prev = entryStack.pop()
-      currentPath = prev.path
-      searchQuery = prev.query
-      if (launcher) {
-        if (searchQuery !== "") {
-          launcher.setSearchText(">pass " + searchQuery)
-        } else {
-          launcher.setSearchText(">pass ")
-        }
-      }
-      init()
-    }
-  }
-
-  function navigateToPath(path) {
-    entryStack.push({
-      "path": currentPath,
-      "query": searchQuery
-    })
-    currentPath = path
-    searchQuery = ""
-    isDetailMode = false
-    selectedEntry = null
-    if (launcher) {
-      launcher.setSearchText(">pass ")
-    }
-    init()
-  }
-
   function parsePassEntry(output) {
     var lines = output.split('\n')
-    var data = {
-      "password": "",
-      "fields": []
-    }
-
-    var passwordLine = true
+    var data = { password: "", fields: [], hasOtp: false }
+    var passwordFound = false
     for (var i = 0; i < lines.length; i++) {
       var line = lines[i].trim()
       if (line === "") continue
-
-      if (passwordLine && i === 0) {
+      if (!passwordFound) {
         data.password = line
-        passwordLine = false
+        passwordFound = true
         continue
       }
-
+      if (line.indexOf("otpauth://") !== -1) data.hasOtp = true
       var colonIndex = line.indexOf(': ')
       if (colonIndex > 0) {
         var key = line.substring(0, colonIndex)
         var value = line.substring(colonIndex + 2)
-        data.fields.push({"key": key, "value": value})
+        data.fields.push({ key: key, value: value })
       }
     }
     return data
@@ -275,59 +223,32 @@ Item {
   function fuzzyMatch(query, target) {
     query = query.toLowerCase()
     target = target.toLowerCase()
-
-    if (query.length === 0) {
-      return 1
-    }
-
+    if (query.length === 0) return 1
     var queryParts = query.split(/\s+/).filter(function(p) { return p.length > 0 })
-    if (queryParts.length === 0) {
-      return 1
-    }
+    if (queryParts.length === 0) return 1
 
-    var matchPositions = []
     for (var p = 0; p < queryParts.length; p++) {
       var part = queryParts[p]
       var found = false
-      for (var i = 0; i < target.length - part.length + 1; i++) {
+      for (var i = 0; i <= target.length - part.length; i++) {
         var match = true
         for (var j = 0; j < part.length; j++) {
-          if (target[i + j] !== part[j]) {
-            match = false
-            break
-          }
+          if (target[i + j] !== part[j]) { match = false; break }
         }
-        if (match) {
-          matchPositions.push(i)
-          found = true
-          break
-        }
+        if (match) { found = true; break }
       }
-      if (!found) {
-        return 0
-      }
+      if (!found) return 0
     }
 
-    var lastMatchIndex = matchPositions.length > 0 ? matchPositions[matchPositions.length - 1] : -1
-
+    var parts = target.split('/')
     var score = 0
-
-    if (target.startsWith(queryParts[0])) {
-      score += 50
-    } else if (target.indexOf(query.replace(/\s+/g, '')) !== -1) {
-      score += 25
+    for (var p = 0; p < parts.length; p++) {
+      var segVal = 0
+      for (var c = 0; c < parts[p].length; c++) {
+        segVal = segVal * 27 + (122 - parts[p].charCodeAt(c))
+      }
+      score += segVal / Math.pow(1000, p)
     }
-
-    if (lastMatchIndex === 0) {
-      score += 15
-    } else if (lastMatchIndex > 0 && target[lastMatchIndex - 1] === '/') {
-      score += 12
-    } else if (lastMatchIndex > 0) {
-      score += 5
-    }
-
-    score += Math.max(0, 20 - (target.length - query.replace(/\s+/g, '').length) / 2)
-
     return score
   }
 
@@ -341,13 +262,10 @@ Item {
       for (var i = 0; i <= target.length - part.length; i++) {
         var match = true
         for (var j = 0; j < part.length; j++) {
-          if (target[i + j] !== part[j]) {
-            match = false
-            break
-          }
+          if (target[i + j] !== part[j]) { match = false; break }
         }
         if (match) {
-          ranges.push({ "start": i, "end": i + part.length })
+          ranges.push({ start: i, end: i + part.length })
           break
         }
       }
@@ -355,10 +273,24 @@ Item {
     return ranges
   }
 
+  function handleCommand(searchText) {
+    return searchText.startsWith(">pass")
+  }
+
+  function commands() {
+    return [{
+      name: ">pass",
+      description: pluginApi?.tr("command.description") || "Search gnu pass password entries",
+      icon: "lock",
+      isTablerIcon: true,
+      onActivate: function() {
+        launcher.setSearchText(">pass ")
+      }
+    }]
+  }
+
   function getResults(searchText) {
-    if (!searchText.startsWith(">pass")) {
-      return []
-    }
+    if (!searchText.startsWith(">pass")) return []
 
     if (root.isDetailMode && root.selectedEntry) {
       return getPasswordFieldResults()
@@ -369,32 +301,29 @@ Item {
       searchQuery = newQuery
       if (!root.isDetailMode) {
         selectedEntry = null
-        init()
+        searchTimer.restart()
       }
     }
 
     if (!loaded) {
       return [{
-        "name": "Loading...",
-        "description": "Loading password entries...",
-        "icon": "refresh",
-        "isTablerIcon": true,
-        "onActivate": function() {}
+        name: "Loading...",
+        description: pluginApi?.tr("result.loading") || "Loading password entries...",
+        icon: "refresh",
+        isTablerIcon: true,
+        onActivate: function() {}
       }]
     }
 
     var results = []
-
-    if (currentPath !== "" && searchQuery === "") {
+    if (currentPath !== "") {
       results.push({
-        "name": "..",
-        "description": pluginApi?.tr("result.goBack") || "Go back",
-        "icon": "arrow-left",
-        "isTablerIcon": true,
-        "singleLine": true,
-        "onActivate": function() {
-          root.goBack()
-        }
+        name: "..",
+        description: currentPath,
+        icon: "arrow-left",
+        isTablerIcon: true,
+        singleLine: true,
+        onActivate: function() { root.goBack() }
       })
     }
 
@@ -403,40 +332,33 @@ Item {
       var entry = cachedEntries[i]
       var score = fuzzyMatch(searchQuery, entry.name)
       if (score > 0) {
-        scored.push({
-          "entry": entry,
-          "score": score
-        })
+        scored.push({ entry: entry, score: score })
       }
     }
 
+    scored.sort(function(a, b) { return b.entry.name - a.entry.name })
     scored.sort(function(a, b) { return b.score - a.score })
 
     for (var j = 0; j < Math.min(scored.length, 50); j++) {
       var s = scored[j]
-      var entryRef = s.entry
-      var icon = s.entry.isDir ? "folder" : "key"
-      var description = s.entry.isDir
-        ? (pluginApi?.tr("result.folder") || "Folder")
-        : (pluginApi?.tr("result.password") || "Password")
-
-      results.push({
-        "name": s.entry.name,
-        "description": description,
-        "icon": icon,
-        "isTablerIcon": true,
-        "singleLine": true,
-        "onActivate": function() {
-          var e = entryRef
-          return function() {
+      ;(function(e) {
+        results.push({
+          name: e.name,
+          description: e.isDir
+            ? (pluginApi?.tr("result.folder") || "Folder")
+            : (pluginApi?.tr("result.password") || "Password"),
+          icon: e.isDir ? "folder" : "key",
+          isTablerIcon: true,
+          singleLine: true,
+          onActivate: function() {
             if (e.isDir) {
               root.navigateToPath(e.fullPath)
             } else {
               root.showPasswordOptions(e.fullPath)
             }
           }
-        }()
-      })
+        })
+      })(s.entry)
     }
 
     return results
@@ -448,141 +370,162 @@ Item {
     var path = root.selectedEntry.path
 
     results.push({
-      "name": "..",
-      "description": path,
-      "icon": "arrow-left",
-      "isTablerIcon": true,
-      "singleLine": true,
-      "onActivate": function() {
-        root.resetDetailMode()
-        if (launcher) launcher.updateResults()
-      }
+      name: "..",
+      description: path,
+      icon: "arrow-left",
+      isTablerIcon: true,
+      singleLine: true,
+      onActivate: function() { root.resetDetailMode(); if (launcher) launcher.updateResults() }
     })
 
     results.push({
-      "name": pluginApi?.tr("action.copyPassword") || "Copy Password",
-      "description": pluginApi?.tr("action.copyPasswordDesc") || "Copy password to clipboard",
-      "icon": "copy",
-      "isTablerIcon": true,
-      "singleLine": true,
-      "onActivate": function() {
-        root.copyField(path, null)
-      }
+      name: pluginApi?.tr("action.copyPassword") || "Copy Password",
+      description: pluginApi?.tr("action.copyPasswordDesc") || "Copy password to clipboard",
+      icon: "copy",
+      isTablerIcon: true,
+      singleLine: true,
+      onActivate: function() { root.copyField(path, null) }
     })
 
     results.push({
-      "name": pluginApi?.tr("action.typePassword") || "Type Password",
-      "description": pluginApi?.tr("action.typePasswordDesc") || "Type password using wtype",
-      "icon": "typography",
-      "isTablerIcon": true,
-      "singleLine": true,
-      "onActivate": function() {
-        root.typeField(path, null)
-      }
+      name: pluginApi?.tr("action.typePassword") || "Type Password",
+      description: pluginApi?.tr("action.typePasswordDesc") || "Type password using wtype",
+      icon: "typography",
+      isTablerIcon: true,
+      singleLine: true,
+      onActivate: function() { root.typeField(path, null) }
     })
 
-    var otpRef = { "path": path }
-    results.push({
-      "name": pluginApi?.tr("action.copyOtp") || "Copy OTP",
-      "description": pluginApi?.tr("action.otpDesc") || "Copy current OTP code",
-      "icon": "copy",
-      "isTablerIcon": true,
-      "singleLine": true,
-      "onActivate": function() {
-        root.copyOtp(otpRef.path)
-      }
-    })
+    if (data.hasOtp) {
+      results.push({
+        name: pluginApi?.tr("action.copyOtp") || "Copy OTP",
+        description: pluginApi?.tr("action.otpDesc") || "Copy current OTP code",
+        icon: "copy",
+        isTablerIcon: true,
+        singleLine: true,
+        onActivate: function() { root.copyOtp(path) }
+      })
 
-    results.push({
-      "name": pluginApi?.tr("action.typeOtp") || "Type OTP",
-      "description": pluginApi?.tr("action.otpDesc") || "Type current OTP code",
-      "icon": "typography",
-      "isTablerIcon": true,
-      "singleLine": true,
-      "onActivate": function() {
-        root.typeOtp(otpRef.path)
-      }
-    })
+      results.push({
+        name: pluginApi?.tr("action.typeOtp") || "Type OTP",
+        description: pluginApi?.tr("action.otpDesc") || "Type current OTP code",
+        icon: "typography",
+        isTablerIcon: true,
+        singleLine: true,
+        onActivate: function() { root.typeOtp(path) }
+      })
+    }
 
     for (var i = 0; i < data.fields.length; i++) {
-      var field = data.fields[i]
-
-      results.push({
-        "name": pluginApi?.tr("action.copyField", { "key": field.key }) || ("Copy " + field.key),
-        "description": field.value,
-        "icon": "copy",
-        "isTablerIcon": true,
-        "singleLine": true,
-        "onActivate": function() {
-          root.copyField(path, field)
-        }
-      })
-
-      results.push({
-        "name": pluginApi?.tr("action.typeField", { "key": field.key }) || ("Type " + field.key),
-        "description": field.value,
-        "icon": "typography",
-        "isTablerIcon": true,
-        "singleLine": true,
-        "onActivate": function() {
-          root.typeField(path, field)
-        }
-      })
+      ;(function(f) {
+        results.push({
+          name: pluginApi?.tr("action.copyField", { key: f.key }) || ("Copy " + f.key),
+          description: f.value,
+          icon: "copy",
+          isTablerIcon: true,
+          singleLine: true,
+          onActivate: function() { root.copyField(path, f) }
+        })
+        results.push({
+          name: pluginApi?.tr("action.typeField", { key: f.key }) || ("Type " + f.key),
+          description: f.value,
+          icon: "typography",
+          isTablerIcon: true,
+          singleLine: true,
+          onActivate: function() { root.typeField(path, f) }
+        })
+      })(data.fields[i])
     }
 
     return results
   }
 
   function showPasswordOptions(path) {
-    showProcPath = path
-    var escapedPath = path.replace(/'/g, "'\\''")
+    root.selectedField = ""
+    root.selectedEntry = { path: path, data: null }
+    pinentryActive = false
+    restoringFromPinentry = false
+    var escapedPath = shellEscape(path)
     showProc.exec(["pass", "show", escapedPath])
   }
 
   function copyField(path, field) {
-    var value = ""
-    if (field) {
-      value = field.value
-    } else {
-      value = root.selectedEntry ? root.selectedEntry.data.password : ""
-    }
-
-    var escapedValue = value.replace(/'/g, "'\\''")
-    copyProc.exec(["sh", "-c", "printf '%s' '" + escapedValue + "' | wl-copy"])
+    var value = field ? field.value : (root.selectedEntry ? root.selectedEntry.data.password : "")
+    var escapedValue = shellEscape(value)
+    root.resetDetailMode()
+    launcher.close()
+    actionProc.exec(["sh", "-c", "printf '%s' '" + escapedValue + "' | wl-copy"])
   }
 
   function typeField(path, field) {
-    var value = ""
-    if (field) {
-      value = field.value
-    } else if (root.selectedEntry) {
-      value = root.selectedEntry.data.password
-    }
-
+    var value = field ? field.value : (root.selectedEntry ? root.selectedEntry.data.password : "")
     root.selectedField = field ? "type-field" : "type-password"
-    var wtypeDelay = pluginApi?.pluginSettings?.wtypeDelay || pluginApi?.manifest?.metadata?.defaultSettings?.wtypeDelay || 12
-    var typeDelay = pluginApi?.pluginSettings?.typeDelay || pluginApi?.manifest?.metadata?.defaultSettings?.typeDelay || 0.2
-    var escapedValue = value.replace(/'/g, "'\\''")
+    var typeDelay = getSetting("typeDelay", 0.5)
+    var wtypeDelay = getSetting("wtypeDelay", 12)
+    var escapedValue = shellEscape(value)
     root.resetDetailMode()
     launcher.close()
-    copyProc.exec(["sh", "-c", "sleep " + typeDelay + " && printf '%s' '" + escapedValue + "' | wtype -d " + wtypeDelay + " -"])
+    actionProc.exec(["sh", "-c", "sleep " + typeDelay + " && printf '%s' '" + escapedValue + "' | wtype -d " + wtypeDelay + " -"])
   }
 
   function copyOtp(path) {
     root.selectedField = "otp"
-    var escapedPath = path.replace(/'/g, "'\\''")
+    var escapedPath = shellEscape(path)
     otpProc.exec(["pass", "otp", escapedPath])
   }
 
   function typeOtp(path) {
-    root.selectedField = "otp-type"
-    var escapedPath = path.replace(/'/g, "'\\''")
+    root.selectedField = "type-otp"
+    var escapedPath = shellEscape(path)
     otpProc.exec(["pass", "otp", escapedPath])
+  }
+
+  function goBack() {
+    if (entryStack.length === 0) return
+    var prev = entryStack.pop()
+    currentPath = prev.path
+    searchQuery = prev.query
+    if (launcher) {
+      launcher.setSearchText(searchQuery !== "" ? ">pass " + searchQuery : ">pass ")
+    }
+    searchTimer.restart()
+  }
+
+  function navigateToPath(path) {
+    entryStack.push({ path: currentPath, query: searchQuery })
+    currentPath = path
+    searchQuery = ""
+    isDetailMode = false
+    selectedEntry = null
+    if (launcher) launcher.setSearchText(">pass ")
+    searchTimer.restart()
+  }
+
+  function init() {
+    searchTimer.restart()
+  }
+
+  function onOpened() {
+    if (restoringFromPinentry) {
+      restoringFromPinentry = false
+      return
+    }
+    currentPath = ""
+    entryStack = []
+    searchQuery = ""
+    cachedEntries = []
+    loaded = false
+    isDetailMode = false
+    selectedEntry = null
+    selectedField = ""
+    pinentryActive = false
+    searchTimer.stop()
+    performSearch()
   }
 
   function resetDetailMode() {
     isDetailMode = false
     selectedEntry = null
-    selectedField = null
+    selectedField = ""
   }
 }

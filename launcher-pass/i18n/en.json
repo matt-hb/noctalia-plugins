@@ -1,9 +1,12 @@
 {
+  "command": {
+    "description": "Search gnu pass password entries"
+  },
   "result": {
     "goBack": "Go back",
     "folder": "Folder",
     "password": "Password",
-    "passwordEntry": "Password entry"
+    "loading": "Loading password entries..."
   },
   "action": {
     "copyPassword": "Copy Password",
@@ -23,7 +26,7 @@
     },
     "typeDelay": {
       "label": "Launcher Close Delay",
-      "desc": "Delay before typing starts in seconds (default: 0.2)"
+      "desc": "Delay before typing starts in seconds (default: 0.5)"
     },
     "wtypeDelay": {
       "label": "Wtype Keystroke Delay",

@@ -21,7 +21,7 @@
     "defaultSettings": {
       "storePath": "",
       "typeDelay": 0.5,
-      "wtypeDelay": 20
+      "wtypeDelay": 12
     }
   }
 }
