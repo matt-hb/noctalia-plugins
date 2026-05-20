@@ -22,7 +22,7 @@ Item {
 
   property bool isDetailMode: false
   property var selectedEntry: null
-  property string selectedField: ""
+  property string selectedAction: ""
 
   property bool pinentryActive: false
   property bool restoringFromPinentry: false
@@ -100,12 +100,12 @@ Item {
     onExited: function(exitCode, exitStatus) {
       if (exitCode !== 0) return
       var otp = otpProc.stdout.text.trim()
-      if (root.selectedField === "otp") {
+      if (root.selectedAction === "copy") {
         var escapedValue = shellEscape(otp)
         root.resetDetailMode()
         launcher.close()
         actionProc.exec(["sh", "-c", "printf '%s' '" + escapedValue + "' | wl-copy"])
-      } else if (root.selectedField === "type-otp") {
+      } else if (root.selectedAction === "type") {
         var typeDelay = getSetting("typeDelay", 0.5)
         var wtypeDelay = getSetting("wtypeDelay", 12)
         var escValue = shellEscape(otp)
@@ -119,7 +119,7 @@ Item {
   Process {
     id: actionProc
     onExited: function(exitCode, exitStatus) {
-      if (selectedField !== "type-password" && selectedField !== "type-field" && selectedField !== "type-otp") {
+      if (root.selectedAction === "copy") {
         ToastService.showNotice(pluginApi?.tr("notification.copied"))
       }
     }
@@ -423,7 +423,6 @@ Item {
   }
 
   function showPasswordOptions(path) {
-    root.selectedField = ""
     root.selectedEntry = { path: path, data: null }
     pinentryActive = false
     restoringFromPinentry = false
@@ -434,6 +433,7 @@ Item {
 
   function copyField(path, field) {
     var value = field ? field.value : (root.selectedEntry ? root.selectedEntry.data.password : "")
+    root.selectedAction = "copy"
     var escapedValue = shellEscape(value)
     root.resetDetailMode()
     launcher.close()
@@ -442,7 +442,7 @@ Item {
 
   function typeField(path, field) {
     var value = field ? field.value : (root.selectedEntry ? root.selectedEntry.data.password : "")
-    root.selectedField = field ? "type-field" : "type-password"
+    root.selectedAction = "type"
     var typeDelay = getSetting("typeDelay", 0.5)
     var wtypeDelay = getSetting("wtypeDelay", 12)
     var escapedValue = shellEscape(value)
@@ -451,18 +451,19 @@ Item {
     actionProc.exec(["sh", "-c", "sleep " + typeDelay + " && printf '%s' '" + escapedValue + "' | wtype -d " + wtypeDelay + " -"])
   }
 
-  function copyOtp(path) {
-    root.selectedField = "otp"
+  function doOtp(path, actionType) {
+    root.selectedAction = actionType
     var escapedPath = shellEscape(path)
     otpProc.environment = { "PASSWORD_STORE_DIR": passwordStoreDir }
     otpProc.exec(["pass", "otp", escapedPath])
   }
 
+  function copyOtp(path) {
+    doOtp(path, "copy")
+  }
+
   function typeOtp(path) {
-    root.selectedField = "type-otp"
-    var escapedPath = shellEscape(path)
-    otpProc.environment = { "PASSWORD_STORE_DIR": passwordStoreDir }
-    otpProc.exec(["pass", "otp", escapedPath])
+    doOtp(path, "type")
   }
 
   function goBack() {
@@ -502,7 +503,6 @@ Item {
     loaded = false
     isDetailMode = false
     selectedEntry = null
-    selectedField = ""
     pinentryActive = false
     searchTimer.stop()
     performSearch()
@@ -511,6 +511,5 @@ Item {
   function resetDetailMode() {
     isDetailMode = false
     selectedEntry = null
-    selectedField = ""
   }
 }
