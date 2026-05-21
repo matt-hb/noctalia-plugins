@@ -1273,7 +1273,7 @@
     {
       "id": "osk-toggle",
       "name": "OSK Toggle",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "official": false,
       "author": "blackteaextract",
       "description": "Toggle an on-screen keyboard (Squeekboard or wvkbd) with live availability detection, hover icons, and configurable settings. Supersedes squeekboard-toggle.",
@@ -1285,7 +1285,7 @@
         "Bar",
         "Utility"
       ],
-      "lastUpdated": "2026-04-27T21:47:50Z"
+      "lastUpdated": "2026-05-19T19:12:21+03:00"
     },
     {
       "id": "parallax-wallpaper",
