@@ -12,8 +12,6 @@ A Noctalia launcher provider plugin for GNU Pass password store.
 - Quick access via `>pass` command
 - Configurable password store path
 
-## Preview
-
 ## Usage
 
 1. Open the launcher with your configured keybind
@@ -27,6 +25,10 @@ A Noctalia launcher provider plugin for GNU Pass password store.
    - **Copy <field>**: Copy any field (username, URL, etc.)
    - **Type <field>**: Type any field using wtype
 
+## IPC
+
+    qs -c noctalia-shell ipc call plugin:launcher-pass toggle
+
 ## Requirements
 
 - [GNU Pass](https://www.passwordstore.org/) password store
@@ -34,20 +36,15 @@ A Noctalia launcher provider plugin for GNU Pass password store.
 - `wtype` for keyboard input (optional)
 - `pass-otp` extension for OTP codes (optional)
 
-## Installation
-
-1. Copy this plugin to your Noctalia plugins directory:
-   ```
-   ~/.config/noctalia/plugins/launcher-pass/
-   ```
-
-2. Enable the plugin in Noctalia settings
-
-3. Configure a keybind for quick access (optional)
-
 ## Configuration
 
-By default, the plugin uses `~/.password-store`. You can configure a custom path in the plugin settings.
+By default, the plugin uses the password store rooted in `~/.password-store`. You can configure a custom path in the plugin settings.
+
+Other configurable values are:
+
+- `Launcher Close Delay`: a time in seconds that will be awaited after launcher is closed before starting auto typing, this might be required to let the focus return to the proper input field.
+- `Wtype Keystroke Delay`: delay between keystrokes in milliseconds, increase this value if the input fields do not keep pace with auto typing.
+- `Clipboard Timeout`: number of seconds before the clipboard is cleared when copy to clipboard action is selected for password or OTP fields, if this configuration is left empty the default `pass` environment variable `PASSWORD_STORE_CLIP_TIME` is used, otherwise the local configuration will take precedence.
 
 ## Keybinds
 
@@ -55,6 +52,7 @@ By default, the plugin uses `~/.password-store`. You can configure a custom path
 |--------|-------------|
 | `>pass` | Open pass browser |
 | `>pass <query>` | Search passwords |
+
 
 ## Fuzzy Search
 
