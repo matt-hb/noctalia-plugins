@@ -792,6 +792,21 @@
       "lastUpdated": "2026-04-23T21:41:29+02:00"
     },
     {
+      "id": "launcher-pass",
+      "name": "Launcher pass",
+      "version": "1.0.0",
+      "official": false,
+      "author": "Marco Melletti",
+      "description": "Noctalia Launcher gnu pass provider",
+      "repository": "https://github.com/noctalia-dev/noctalia-plugins",
+      "minNoctaliaVersion": "4.7.7",
+      "license": "MIT",
+      "tags": [
+        "Launcher"
+      ],
+      "lastUpdated": "2026-05-22T12:20:30+02:00"
+    },
+    {
       "id": "linux-wallpaperengine-controller",
       "name": "Linux WallpaperEngine Controller",
       "version": "1.3.0",
